@@ -57,7 +57,7 @@ def main():
         model = torch.compile(model)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=args.weight_decay)
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.amp and args.device.type == 'cuda'))
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.amp and args.device.type == 'cuda')) #best thing
 
     best_val = float('inf')
     t0 = time.time()
