@@ -32,8 +32,11 @@ OUT = ROOT / "out"
 
 
 def run(cmd: str):
-    print(f"\n>>> {cmd}")
-    res = subprocess.run(shlex.split(cmd), cwd=ROOT)
+    cmd_parts = shlex.split(cmd)
+    if cmd_parts and cmd_parts[0] == "python":
+        cmd_parts[0] = sys.executable
+    print(f"\n>>> {' '.join(cmd_parts)}")
+    res = subprocess.run(cmd_parts, cwd=ROOT)
     if res.returncode != 0:
         sys.exit(res.returncode)
 
