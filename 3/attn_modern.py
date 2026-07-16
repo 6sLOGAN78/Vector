@@ -54,6 +54,7 @@ class CausalSelfAttentionModern(nn.Module):
 
         # Concatenate past cache (cache is stored in Hk heads)
         if kv_cache is not None:
+            # torch.cat appends key/value tensors along dim=2 (sequence dimension)
             k_all = torch.cat([kv_cache.k, k], dim=2)  # (B,Hk, Tpast+T, D)
             v_all = torch.cat([kv_cache.v, v], dim=2)
         else:
@@ -62,17 +63,23 @@ class CausalSelfAttentionModern(nn.Module):
         # Sliding-window + attention-sink (crop along seq length)
         if self.sliding_window is not None and k_all.size(2) > (self.sliding_window + self.attention_sink):
             s = self.attention_sink
+            # torch.cat slices and joins self.attention_sink tokens from the start and the last self.sliding_window tokens,
+            # retaining high-attention peak activations at the beginning of the context window.
             k_all = torch.cat([k_all[:, :, :s, :], k_all[:, :, -self.sliding_window:, :]], dim=2)
             v_all = torch.cat([v_all[:, :, :s, :], v_all[:, :, -self.sliding_window:, :]], dim=2)
 
         # --- GQA expand: repeat K/V heads to match Q heads before attention ---
         if self.n_kv_head != self.n_head:
+            # repeat_interleave repeats key and value head activations group_size times along head dimension (dim=1)
+            # to align smaller GQA key/value heads with query head dimensions.
             k_attn = k_all.repeat_interleave(self.group_size, dim=1)  # (B,H,Tk,D)
             v_attn = v_all.repeat_interleave(self.group_size, dim=1)  # (B,H,Tk,D)
         else:
             k_attn, v_attn = k_all, v_all
 
         # Scaled dot-product attention (PyTorch scales internally)
+        # If kv_cache is active, is_causal is set to False because past keys/values are already resolved,
+        # and we only project current query tokens.
         is_causal = kv_cache is None
         y = F.scaled_dot_product_attention(q, k_attn, v_attn,
                                            attn_mask=None,
@@ -84,6 +91,7 @@ class CausalSelfAttentionModern(nn.Module):
 
         # Update KV cache (store compact Hk heads, not expanded)
         if kv_cache is not None:
+            # Accumulates newly computed key/value parameters into local cache variables.
             k_new = torch.cat([kv_cache.k, k], dim=2)  # (B,Hk,*,D)
             v_new = torch.cat([kv_cache.v, v], dim=2)
         else:

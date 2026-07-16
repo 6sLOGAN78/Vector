@@ -7,12 +7,13 @@ class FeedForward(nn.Module):
       input:     (B, T, d_model)
       inner:     (B, T, mult*d_model)
       output:    (B, T, d_model)
-
-    `mult*d_model` means the hidden width is `mult` times larger than `d_model`.
-    Typical values: mult=4 for GELU FFN in GPT-style blocks.
     """
     def __init__(self, d_model: int, mult: int = 4, dropout: float = 0.0):
         super().__init__()
+        # nn.Sequential chains the layers. Linears project representations to/from high dim,
+        # and nn.GELU applies Gaussian Error Linear Unit activation mathematically defined as:
+        # GELU(x) = x * P(X <= x) = x * Phi(x)
+        # yielding smooth non-linear representation mappings.
         self.net = nn.Sequential(
             nn.Linear(d_model, mult * d_model),
             nn.GELU(),
@@ -21,4 +22,5 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
+        # Passes the tensor through the sequential linear, activation, and dropout layers.
         return self.net(x)

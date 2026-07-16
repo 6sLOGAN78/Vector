@@ -56,21 +56,35 @@ def main():
     if args.compile and hasattr(torch, 'compile'):
         model = torch.compile(model)
 
+    # AdamW incorporates weight decay directly into step updates rather than gradient math.
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=args.weight_decay)
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.amp and args.device.type == 'cuda')) #best thing
+    
+    # GradScaler scales losses to prevent gradient underflow when computing in mixed precision (float16).
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.amp and args.device.type == 'cuda'))
 
     best_val = float('inf')
     t0 = time.time()
     model.train()
     for step in range(1, args.steps + 1):
         xb, yb = ds.get_batch('train', args.batch_size, args.device)
+        
+        # autocast dynamically runs forward pass computations in float16 for speed and memory efficiency.
         with torch.cuda.amp.autocast(enabled=(args.amp and args.device.type == 'cuda')):
             _, loss = model(xb, yb)
+            
+        # set_to_none=True frees memory by deleting gradient tensors instead of setting them to zero.
         opt.zero_grad(set_to_none=True)
+        
+        # scale(loss).backward() scales the loss value before running backpropagation to generate scaled gradients.
         scaler.scale(loss).backward()
+        
         if args.grad_clip > 0:
+            # unscale_ downscales gradients to original precision before clipping.
             scaler.unscale_(opt)
+            # clip_grad_norm_ clips parameter gradients so their aggregate L2-norm does not exceed args.grad_clip.
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            
+        # step updates model parameters using unscaled gradients, and scaler.update updates the scale factor.
         scaler.step(opt)
         scaler.update()
 

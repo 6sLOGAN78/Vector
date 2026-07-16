@@ -17,7 +17,10 @@ class TransformerBlockModern(nn.Module):
             nn.Linear(n_embd, 4*n_embd), nn.GELU(), nn.Linear(4*n_embd, n_embd), nn.Dropout(dropout)
         )
     def forward(self, x, kv_cache=None, start_pos: int = 0):
+        # Passes input block through self.ln1 (RMSNorm/LayerNorm) then through attention.
         a, kv_cache = self.attn(self.ln1(x), kv_cache=kv_cache, start_pos=start_pos)
+        # Adds residual connection (tensor addition x + a) to prevent signal degradation in backpropagation.
         x = x + a
+        # Passes x through self.ln2 norm, then SwiGLU projection FFN, and adds second residual step.
         x = x + self.ffn(self.ln2(x))
         return x, kv_cache

@@ -24,9 +24,14 @@ class RollingKV:
         if self.k is None:
             self.k, self.v = k_new, v_new
         else:
+            # torch.cat joins past cached KV tensors and new KV tensors along sequence length dimension (dim=2),
+            # increasing the history sequence context length.
             self.k = torch.cat([self.k, k_new], dim=2)
             self.v = torch.cat([self.v, v_new], dim=2)
-        # crop
+        
+        # Slices out and retains the attention sink tokens at the start (indices :self.sink)
+        # and sliding window history tokens at the tail end (indices -self.window:),
+        # then concatenates them along dim=2 to enforce cache context memory boundaries.
         if self.k.size(2) > self.window + self.sink:
             sink_part = self.k[:, :, :self.sink, :]
             sink_val  = self.v[:, :, :self.sink, :]

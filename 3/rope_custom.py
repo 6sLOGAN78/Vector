@@ -25,9 +25,17 @@ class RoPECache:
     def _build(self, max_pos: int):
         """(Re)build cos/sin tables for a new max_pos."""
         self.max_pos = max_pos
+        # torch.arange generates even column indices. division, power (**), and reciprocal (1.0 /)
+        # compute the frequency coefficients inv_freq = 1 / (base ** (2i / d_head)).
         inv_freq = 1.0 / (10000.0 ** (torch.arange(0, self.head_dim, 2, device=self.device).float() / self.head_dim))
+        
+        # t is a 1D tensor representing sequence positions [0, max_pos-1].
         t = torch.arange(max_pos, device=self.device).float()
+        
+        # torch.outer computes the outer product t * inv_freq producing a 2D matrix of angles of shape (max_pos, head_dim/2).
         freqs = torch.outer(t, inv_freq)  # (max_pos, head_dim/2)
+        
+        # torch.cos and torch.sin compute element-wise cosine and sine rotation components from the angles.
         self.cos = torch.cos(freqs)
         self.sin = torch.sin(freqs)
 
@@ -36,13 +44,23 @@ def apply_rope_single(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> 
     x: (B,H,T,D) with D even; cos/sin: (T,D/2)
     """
     assert x.size(-1) % 2 == 0
+    # unsqueeze(0) expands shape from (T, D/2) to (1, 1, T, D/2) so it automatically broadcasts over batch B and head H.
     cos = cos.unsqueeze(0).unsqueeze(0)  # (1,1,T,D/2)
     sin = sin.unsqueeze(0).unsqueeze(0)
+    
+    # Slices x along the last dimension into even-indexed (::2) and odd-indexed (1::2) coordinates.
+    # This separates the feature dimension into D/2 pairs of 2D vectors.
     x1 = x[..., ::2]
     x2 = x[..., 1::2]
+    
+    # Mathematically rotates each 2D vector pair [x1, x2] by angle theta using:
+    # [x1 * cos - x2 * sin, x1 * sin + x2 * cos]
     xr1 = x1 * cos - x2 * sin
     xr2 = x1 * sin + x2 * cos
+    
+    # torch.empty_like allocates uninitialized memory matching the shape and type of x.
     out = torch.empty_like(x)
+    # Assigns the rotated coordinate outputs back into their corresponding even/odd locations.
     out[..., ::2] = xr1
     out[..., 1::2] = xr2
     return out

@@ -12,6 +12,10 @@ class SwiGLU(nn.Module):
         self.act = nn.SiLU()
         self.drop = nn.Dropout(dropout)
     def forward(self, x):
+        # Projects input through w1 to get activation component 'a'.
         a = self.w1(x)
+        # self.act (nn.SiLU) computes SiLU/Swish activation: b = x_proj * sigmoid(x_proj) = x_proj / (1 + e^-x_proj)
         b = self.act(self.w2(x))
+        # Performs element-wise multiplication (a * b) to implement Gated Linear Unit,
+        # then projects back using linear layer w3 and applies dropout.
         return self.drop(self.w3(a * b))

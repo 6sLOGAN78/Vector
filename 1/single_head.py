@@ -16,18 +16,33 @@ class SingleHeadSelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor):  # x: (B, T, d_model)
         B, T, _ = x.shape
+        # nn.Linear projects x to query (q), key (k), and value (v) spaces.
         q = self.q(x)  # (B,T,d_k)
         k = self.k(x)  # (B,T,d_k)
         v = self.v(x)  # (B,T,d_k)
         if self.trace_shapes:
             print(f"q {q.shape}  k {k.shape}  v {v.shape}")
+        
+        # Scaling factor 1/sqrt(d_k) keeps the dot products from growing too large in magnitude
+        # which would result in extremely small gradients after softmax.
         scale = 1.0 / math.sqrt(q.size(-1))
-        attn = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B,T,T)
+        
+        # k.transpose(-2, -1) swaps the sequence length (T) and feature (d_k) dimensions of keys.
+        # torch.matmul performs batch matrix multiplication: Q @ K^T, resulting in shape (B, T, T).
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale  
+        
         mask = causal_mask(T, device=x.device)
+        # squeeze(1) removes the head dimension of size 1 to match the 3D shape (B, T, T) of attn.
+        # masked_fill overwrites masked positions (where mask is True) with negative infinity.
         attn = attn.masked_fill(mask.squeeze(1), float('-inf'))
+        
+        # F.softmax computes standard softmax along the last dimension (dim=-1) to convert scores
+        # into a probability distribution over the sequence tokens.
         w = F.softmax(attn, dim=-1)
         w = self.dropout(w)
-        out = torch.matmul(w, v)  # (B,T,d_k)
+        
+        # torch.matmul does a weighted sum of the value vectors: W @ V, yielding shape (B, T, d_k).
+        out = torch.matmul(w, v)  
         if self.trace_shapes:
             print(f"weights {w.shape}  out {out.shape}")
         return out, w

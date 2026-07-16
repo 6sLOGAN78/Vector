@@ -29,6 +29,7 @@ class GPTModern(nn.Module):
     def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None, kv_cache_list=None, start_pos: int = 0):
         B, T = idx.shape
         assert T <= self.block_size
+        # torch.arange generates token position coordinates. unsqueeze(0) extends dimensions to (1, T) for batch dimension.
         pos = torch.arange(0, T, device=idx.device).unsqueeze(0)
         x = self.tok_emb(idx) 
         # + self.pos_emb(pos)
@@ -45,6 +46,8 @@ class GPTModern(nn.Module):
         loss = None
         if targets is not None:
             import torch.nn.functional as F
+            # F.cross_entropy combines log-softmax and negative log likelihood loss.
+            # Flattens logits mapping of shape (B*T, logits.size(-1)) against targets of shape (B*T).
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss, new_caches
 
@@ -68,21 +71,29 @@ class GPTModern(nn.Module):
         kvs = [None] * len(self.blocks)
 
         for _ in range(max_new_tokens):
-            # feed full prompt once; then only the last token
+            # If cache is active, crop prompt context using slice indexing to only retrieve last token.
+            # Otherwise, use full prompt window.
             idx_cond = idx[:, -self.block_size:] if kvs[0] is None else idx[:, -1:]
 
-            # absolute start position from cache length (0 on first step)
+            # start_pos is position offset representing current context size in cache length.
             start_pos = 0 if kvs[0] is None else kvs[0].k.size(2)
 
             logits, _, kvs = self(idx_cond, kv_cache_list=kvs, start_pos=start_pos)
 
             next_logits = logits[:, -1, :] / max(temperature, 1e-6)
             next_logits = _tk(next_logits, top_k=top_k, top_p=top_p)
+            
+            # torch.softmax converts logits directly into probabilities.
             probs = torch.softmax(next_logits, dim=-1)
+            
+            # torch.argmax extracts greedy coordinate indexing when temperature=0.
+            # Otherwise, torch.multinomial samples one token ID using categorical probabilities.
             next_id = torch.argmax(probs, dim=-1, keepdim=True) if temperature == 0.0 else torch.multinomial(probs, 1)
+            
+            # torch.cat joins past sequence history and new coordinate index along sequence dimension (dim=1).
             idx = torch.cat([idx, next_id], dim=1)
 
-            # addition from part 6 for early stopping
+            # early stopping condition
             if eos_id is not None:
                 if (next_id == eos_id).all():
                     break

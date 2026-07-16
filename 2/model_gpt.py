@@ -17,14 +17,24 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor):  # (B,T,C)
         B, T, C = x.shape
+        # Projects input to combined QKV space and views it as (B, T, 3, n_head, d_head) to split components.
         qkv = self.qkv(x).view(B, T, 3, self.n_head, self.d_head)
+        
+        # unbind dim 2 splits QKV along the third dimension to return lists of (q, k, v) tensors.
         q, k, v = qkv.unbind(dim=2)
+        
+        # transpose(1, 2) swaps sequence length T and n_head to yield (B, n_head, T, d_head) for independent calculations.
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        scale = 1.0 / math.sqrt(self.d_head)
-        # PyTorch SDPA (uses flash when available)
+        
+        # F.scaled_dot_product_attention (SDPA) scales dot-product similarity (Q @ K^T) / sqrt(d_head),
+        # applies causal triangular masking (zeroes probabilities where j > i), fits softmax, applies dropout,
+        # and multiplies by Value vectors. It uses hardware-accelerated kernels (FlashAttention) when available.
         y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout.p if self.training else 0.0, is_causal=True)
+        
+        # transpose(1, 2) brings heads back to dimension 2, .contiguous() asserts sequential memory, 
+        # and .view() joins heads and feature dim back into one vector representation of size C (d_model).
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.proj(y)
         return y
@@ -80,7 +90,9 @@ class GPT(nn.Module):
     def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
         B, T = idx.shape
         assert T <= self.block_size
+        # torch.arange generates position index indices. unsqueeze(0) expands shape to (1, T) for batch broadcasting.
         pos = torch.arange(0, T, device=idx.device).unsqueeze(0)
+        # Adds token embedding vectors and position embedding vectors together (broadcasting pos over batch).
         x = self.tok_emb(idx) + self.pos_emb(pos)
         x = self.drop(x)
         for blk in self.blocks:
@@ -89,6 +101,8 @@ class GPT(nn.Module):
         logits = self.head(x)
         loss = None
         if targets is not None:
+            # F.cross_entropy combines log_softmax and negative log likelihood loss.
+            # We flatten logits to (B*T, vocab_size) and targets to (B*T) to align with standard classification interface.
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
 
@@ -97,15 +111,22 @@ class GPT(nn.Module):
                 top_k: int | None = 50, top_p: float | None = None):
         from utils import top_k_top_p_filtering
         self.eval()
-        # Guard: if the prompt is empty, start with a newline byte (10)
+        # idx.size(1) fetches length of prompt. If 0, torch.full populates shape (B, 1) with newline token (10).
         if idx.size(1) == 0:
             idx = torch.full((idx.size(0), 1), 10, dtype=torch.long, device=idx.device)
         for _ in range(max_new_tokens):
+            # Crop prompt sequence length to self.block_size model context window.
             idx_cond = idx[:, -self.block_size:]
             logits, _ = self(idx_cond)
+            # logits[:, -1, :] gets predictions for the final position.
+            # We scale by temperature to adjust sample random variety (logits division acts as inverse softmax scaling).
             logits = logits[:, -1, :] / max(temperature, 1e-6)
             logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
+            
+            # torch.softmax computes normalized probability distribution.
             probs = torch.softmax(logits, dim=-1)
+            # torch.multinomial samples one token from multinomial distribution.
             next_id = torch.multinomial(probs, num_samples=1)
+            # torch.cat joins old coordinates and next index along spatial sequence dimension (dim=1).
             idx = torch.cat([idx, next_id], dim=1)
         return idx
